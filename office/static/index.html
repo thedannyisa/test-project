@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Офис Cursor</title>
+  <link rel="stylesheet" href="/office.css">
+</head>
+<body>
+  <div class="app">
+    <header class="hud">
+      <div class="brand">
+        <p class="eyebrow">CURSOR</p>
+        <h1>Офис</h1>
+        <p id="summary" class="summary">Смотрю, кто на месте…</p>
+      </div>
+      <div class="skybox" aria-hidden="true">
+        <div class="sky">
+          <span class="cloud c1"></span>
+          <span class="cloud c2"></span>
+          <span class="star s1"></span>
+          <span class="star s2"></span>
+        </div>
+        <p class="sky-caption">небо за окном</p>
+      </div>
+      <div class="clock-card">
+        <p id="clock" class="clock">--:--</p>
+        <p class="clock-caption">местное время</p>
+      </div>
+    </header>
+
+    <div id="banner" class="banner" hidden></div>
+
+    <div class="studio">
+      <aside class="deco left" aria-hidden="true">
+        <div class="poster"><span>AI</span><span>LAB</span></div>
+        <div class="shelf">
+          <i></i><i></i><i></i>
+        </div>
+        <div class="plant"><span class="pot"></span></div>
+      </aside>
+
+      <aside class="side">
+        <section id="board" class="board" aria-label="Лимиты — зарплата сотрудников">
+          <div class="board-bezel">
+            <p class="board-kicker">зарплата</p>
+            <h2>ЛИМИТЫ</h2>
+            <div id="meters" class="meters"></div>
+            <div id="reset" class="reset"></div>
+          </div>
+        </section>
+        <div class="deco right" aria-hidden="true">
+          <div class="lamp"></div>
+          <div class="cabinet"><span></span><span></span></div>
+          <div class="coffee"><i></i></div>
+        </div>
+      </aside>
+
+      <main id="floor" class="floor" aria-live="polite"></main>
+
+      <div class="sofa" aria-hidden="true">
+        <span class="cushion"></span>
+        <span class="cushion"></span>
+      </div>
+    </div>
+
+    <aside class="panel">
+      <ul class="legend">
+        <li><span class="dot working"></span> печатает — агент работает</li>
+        <li><span class="dot resting"></span> отошёл — задача закончилась</li>
+        <li><span class="dot away"></span> пустой стол — агент в архиве</li>
+      </ul>
+      <div class="row">
+        <button type="button" id="settings-open" class="quiet" aria-haspopup="dialog" aria-controls="settings">
+          <svg class="gear-icon" viewBox="0 0 16 16" aria-hidden="true">
+            <path fill="currentColor" d="M6.2 1h3.6l.4 2.1c.5.2 1 .5 1.4.8l2-1 1.8 1.8-1 2c.3.4.6.9.8 1.4l2.1.4v3.6l-2.1.4c-.2.5-.5 1-.8 1.4l1 2-1.8 1.8-2-1c-.4.3-.9.6-1.4.8l-.4 2.1H6.2l-.4-2.1c-.5-.2-1-.5-1.4-.8l-2 1-1.8-1.8 1-2c-.3-.4-.6-.9-.8-1.4L.7 10V6.4l2.1-.4c.2-.5.5-1 .8-1.4l-1-2L4.4 1.8l2 1c.4-.3.9-.6 1.4-.8L6.2 1zM8 6.2a1.8 1.8 0 100 3.6 1.8 1.8 0 000-3.6z"/>
+          </svg>
+          Настройки
+        </button>
+        <button type="button" id="refresh" class="quiet">Обновить</button>
+        <button type="button" id="shutdown" class="quiet">Закрыть офис</button>
+      </div>
+    </aside>
+  </div>
+
+  <div id="settings" class="settings" hidden>
+    <div class="settings-card" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="settings-head">
+        <h2 id="settings-title">Настройки</h2>
+        <button type="button" id="settings-close" class="quiet" aria-label="Закрыть настройки">Закрыть</button>
+      </div>
+      <form id="key-form">
+        <label for="api-key">Ключ Cursor</label>
+        <input id="api-key" name="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Длинный ключ после кнопки Add">
+        <div class="row">
+          <button type="submit" class="primary">Посадить своих</button>
+          <button type="button" id="forget" class="quiet">Забыть ключ</button>
+        </div>
+        <p id="key-note" class="note">Ключ остаётся на этом компьютере. Из таблицы копировать нельзя: там только короткий кусок. Нажми Add и скопируй длинный ключ, который Cursor покажет один раз.</p>
+      </form>
+    </div>
+  </div>
+  <script src="/office.js"></script>
+</body>
+</html>

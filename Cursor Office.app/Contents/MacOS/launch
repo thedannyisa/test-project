@@ -1,0 +1,25 @@
+#!/bin/bash
+# Opens the local office. Python 3 comes from the Mac, the agents stay in Cursor.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+cd "$ROOT"
+
+PY=""
+for candidate in \
+  /usr/bin/python3 \
+  /opt/homebrew/bin/python3 \
+  /usr/local/bin/python3 \
+  "$(command -v python3 2>/dev/null || true)"
+do
+  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+    PY="$candidate"
+    break
+  fi
+done
+
+if [ -z "$PY" ]; then
+  osascript -e 'display alert "Нужен Python 3" message "Установи Python 3 с python.org и открой Офис Cursor снова."' || true
+  exit 1
+fi
+
+"$PY" "$ROOT/office/server.py"
