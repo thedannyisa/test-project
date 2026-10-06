@@ -101,6 +101,71 @@ def delete_key() -> None:
     KEY_PATH.unlink(missing_ok=True)
 
 
+CAT_NAMES = (
+    "Барсик",
+    "Мурзик",
+    "Рыжик",
+    "Снежок",
+    "Пушок",
+    "Кузя",
+    "Васька",
+    "Сёма",
+)
+
+EXACT_ROLES = {
+    "office presence": "Дежурство в офисе",
+    "set up test-project environment": "Настройка среды test-project",
+    "application development": "Разработка приложения",
+    "application development (fork)": "Разработка приложения (копия)",
+    "пишет тесты": "Тестировщик",
+    "рисует кнопку": "Дизайнер кнопок",
+    "закончил readme": "Документация",
+    "старая задача": "Архивная задача",
+}
+
+_ROLE_WORDS = {
+    "application": "приложение",
+    "development": "разработка",
+    "environment": "среда",
+    "office": "офис",
+    "presence": "дежурство",
+    "fork": "копия",
+    "copy": "копия",
+    "test": "тест",
+    "tests": "тесты",
+    "testing": "тестирование",
+    "project": "проект",
+    "fix": "исправление",
+    "bug": "ошибка",
+    "bugs": "ошибки",
+    "review": "проверка",
+    "update": "обновление",
+    "add": "добавление",
+    "create": "создание",
+    "setup": "настройка",
+    "design": "дизайн",
+    "docs": "документация",
+    "documentation": "документация",
+    "readme": "документация",
+    "feature": "функция",
+    "refactor": "переработка",
+    "deploy": "выкладка",
+    "deployment": "выкладка",
+    "debug": "отладка",
+    "api": "API",
+    "ui": "интерфейс",
+    "frontend": "интерфейс",
+    "backend": "сервер",
+    "and": "и",
+    "for": "для",
+    "with": "с",
+    "in": "в",
+    "new": "новая",
+    "old": "старая",
+}
+_ROLE_SKIP = {"the", "a", "an", "of", "to", "up"}
+
+
 def public_agent(item: dict) -> dict:
     status = str(item.get("status") or "IDLE").upper()
     if status not in POSES:
@@ -113,6 +178,107 @@ def public_agent(item: dict) -> dict:
         "url": str(item.get("url") or ""),
         "updatedAt": str(item.get("updatedAt") or ""),
     }
+
+
+def cats_path() -> Path:
+    override = os.environ.get("OFFICE_CATS_PATH")
+    if override:
+        return Path(override)
+    return KEY_PATH.parent / "cats.json"
+
+
+def role_title(name: str) -> str:
+    cleaned = " ".join(str(name).split())
+    if not cleaned:
+        return "Без должности"
+    folded = cleaned.casefold()
+    if folded in EXACT_ROLES:
+        return EXACT_ROLES[folded]
+    match = re.fullmatch(r"application development(?:\s*\(([^)]+)\))?", cleaned, re.IGNORECASE)
+    if match:
+        extra = (match.group(1) or "").strip()
+        if not extra:
+            return "Разработка приложения"
+        word = _ROLE_WORDS.get(extra.casefold(), extra)
+        return f"Разработка приложения ({word})"
+    match = re.fullmatch(r"set up (.+?) environment", cleaned, re.IGNORECASE)
+    if match:
+        return f"Настройка среды {match.group(1).strip()}"
+    if re.search(r"[А-Яа-яЁё]", cleaned) and not re.search(r"[A-Za-z]", cleaned):
+        return cleaned
+    translated = _translate_role(cleaned)
+    return translated or cleaned
+
+
+def _translate_role(name: str) -> str:
+    text = re.sub(r"\bset up\b", "настройка", name, flags=re.IGNORECASE)
+    changed = text != name
+    pieces: list[str] = []
+    for token in text.split():
+        bare = token.strip("()[]{}.,:;\"'«»")
+        wrapped = bare != token
+        folded = bare.casefold()
+        if folded in _ROLE_SKIP:
+            changed = True
+            continue
+        if folded in _ROLE_WORDS:
+            word = _ROLE_WORDS[folded]
+            pieces.append(f"({word})" if wrapped else word)
+            changed = True
+            continue
+        pieces.append(token)
+    if not changed or not pieces:
+        return ""
+    result = " ".join(pieces)
+    return result[:1].upper() + result[1:]
+
+
+def _load_cat_names() -> dict[str, str]:
+    try:
+        payload = json.loads(cats_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        str(key): str(value)
+        for key, value in payload.items()
+        if str(value).strip()
+    }
+
+
+def _save_cat_names(mapping: dict[str, str]) -> None:
+    path = cats_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(mapping, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.chmod(0o600)
+
+
+def assign_cats(agents: list[dict], persist: bool = True) -> list[dict]:
+    """Give each agent a stable cat name and a Russian job title.
+
+    Names stick to the agent id. The first new cats are Барсик and Мурзик.
+    Demo rooms pass persist=False so they do not use up the real roster.
+    """
+    mapping = _load_cat_names() if persist else {}
+    used = set(mapping.values())
+    changed = False
+    for agent in agents:
+        agent_id = agent.get("id") or agent.get("name") or ""
+        cat_name = mapping.get(agent_id)
+        if not cat_name:
+            cat_name = next((item for item in CAT_NAMES if item not in used), "")
+            if not cat_name:
+                cat_name = f"Кот {len(used) + 1}"
+            if persist:
+                mapping[agent_id] = cat_name
+                changed = True
+            used.add(cat_name)
+        agent["catName"] = cat_name
+        agent["role"] = role_title(str(agent.get("name") or ""))
+    if persist and changed:
+        _save_cat_names(mapping)
+    return agents
 
 
 TRUNCATED_KEY = (
@@ -197,7 +363,7 @@ def fetch_agents(api_key: str, limit: int = 100, pages: int = MAX_PAGES) -> list
             break
     agents = [public_agent(item) for item in items]
     agents.sort(key=lambda agent: ({"working": 0, "resting": 1, "away": 2}[agent["pose"]], agent["name"]))
-    return agents
+    return assign_cats(agents)
 
 
 def check_key(api_key: str) -> None:
@@ -441,7 +607,13 @@ class OfficeHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/demo":
             agents = [public_agent(item) for item in DEMO_AGENTS]
-            self._send_json({"configured": False, "agents": agents, "error": None, "demo": True})
+            agents.sort(key=lambda agent: ({"working": 0, "resting": 1, "away": 2}[agent["pose"]], agent["name"]))
+            self._send_json({
+                "configured": False,
+                "agents": assign_cats(agents, persist=False),
+                "error": None,
+                "demo": True,
+            })
             return
         static = STATIC_FILES.get(path)
         if static is None:

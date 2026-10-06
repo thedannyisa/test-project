@@ -108,6 +108,7 @@ class OfficeTests(unittest.TestCase):
             cls.key_path.unlink()
         os.environ["OFFICE_API_BASE"] = f"http://127.0.0.1:{cls.cursor_port}"
         os.environ["OFFICE_KEY_PATH"] = str(cls.key_path)
+        os.environ["OFFICE_CATS_PATH"] = str(cls.key_path.with_name("cursor-office-test-cats.json"))
         os.environ["OFFICE_NO_BROWSER"] = "1"
         server.API_ROOT = os.environ["OFFICE_API_BASE"]
         server.KEY_PATH = cls.key_path
@@ -120,9 +121,11 @@ class OfficeTests(unittest.TestCase):
         cls.office.shutdown()
         cls.cursor.shutdown()
         cls.key_path.unlink(missing_ok=True)
+        Path(os.environ["OFFICE_CATS_PATH"]).unlink(missing_ok=True)
 
     def setUp(self) -> None:
         server.delete_key()
+        Path(os.environ["OFFICE_CATS_PATH"]).unlink(missing_ok=True)
         FakeCursor.mode = "ok"
         FakeCursor.seen_auth = []
 
@@ -151,6 +154,16 @@ class OfficeTests(unittest.TestCase):
         self.assertEqual(status, 200)
         poses = [item["pose"] for item in payload["agents"]]
         self.assertEqual(poses, ["working", "working", "resting", "away"])
+        self.assertEqual(
+            [(item["catName"], item["role"]) for item in payload["agents"]],
+            [
+                ("Барсик", "Тестировщик"),
+                ("Мурзик", "Дизайнер кнопок"),
+                ("Рыжик", "Документация"),
+                ("Снежок", "Архивная задача"),
+            ],
+        )
+        self.assertFalse(Path(os.environ["OFFICE_CATS_PATH"]).exists())
 
     def test_key_roundtrip_hides_secret_and_paginates(self) -> None:
         full_key = "crsr_" + ("a" * 40)
@@ -193,6 +206,41 @@ class OfficeTests(unittest.TestCase):
         self.assertIn("Офис", html)
         self.assertIn("ЛИМИТЫ", html)
         self.assertIn("/office.js", html)
+        self.assertIn("Настройки", html)
+        self.assertIn('id="settings"', html)
+        self.assertLess(html.find('id="settings"'), html.find('id="key-form"'))
+        self.assertNotIn("Ключ Cursor", html.split('id="settings"', 1)[0])
+
+    def test_job_titles_are_russian(self) -> None:
+        self.assertEqual(server.role_title("Office presence"), "Дежурство в офисе")
+        self.assertEqual(server.role_title("Set up test-project environment"), "Настройка среды test-project")
+        self.assertEqual(server.role_title("Application development"), "Разработка приложения")
+        self.assertEqual(server.role_title("Application development (fork)"), "Разработка приложения (копия)")
+        self.assertEqual(server.role_title("  пишет   тесты "), "Тестировщик")
+
+    def test_cat_names_stick_when_status_changes(self) -> None:
+        original = [
+            {"id": "presence", "name": "Office presence"},
+            {"id": "setup", "name": "Set up test-project environment"},
+            {"id": "app", "name": "Application development"},
+            {"id": "fork", "name": "Application development (fork)"},
+        ]
+        server.assign_cats([dict(item) for item in original])
+        moved = server.assign_cats([
+            {"id": "setup", "name": "Set up test-project environment"},
+            {"id": "presence", "name": "Office presence"},
+            {"id": "fork", "name": "Application development (fork)"},
+            {"id": "app", "name": "Application development"},
+        ])
+        by_id = {item["id"]: item for item in moved}
+        self.assertEqual(by_id["presence"]["catName"], "Барсик")
+        self.assertEqual(by_id["setup"]["catName"], "Мурзик")
+        self.assertEqual(by_id["presence"]["role"], "Дежурство в офисе")
+        self.assertEqual(by_id["setup"]["role"], "Настройка среды test-project")
+        self.assertEqual(by_id["app"]["role"], "Разработка приложения")
+        self.assertEqual(by_id["fork"]["role"], "Разработка приложения (копия)")
+        saved = Path(os.environ["OFFICE_CATS_PATH"]).read_text(encoding="utf-8")
+        self.assertNotIn("crsr_", saved)
 
     def test_limits_without_key_are_unavailable(self) -> None:
         status, payload = self.request("GET", "/api/limits")

@@ -194,11 +194,14 @@ function render(agents, nextMode, error) {
     plate.className = "nameplate";
     const name = document.createElement("p");
     name.className = "name";
-    name.textContent = agent.name || "Без имени";
+    name.textContent = agent.catName || "Кот";
+    const job = document.createElement("p");
+    job.className = "job";
+    job.textContent = agent.role || agent.name || "Без должности";
     const meta = document.createElement("p");
     meta.className = "meta";
     meta.textContent = POSE_LABEL[agent.pose] || "на месте";
-    plate.append(name, meta);
+    plate.append(name, job, meta);
     if (level === "empty") {
       const resource = document.createElement("p");
       resource.className = "resource";
@@ -349,6 +352,28 @@ function stopPoll() {
   limitsTimer = 0;
 }
 
+const settings = document.querySelector("#settings");
+const settingsOpen = document.querySelector("#settings-open");
+
+function openSettings() {
+  settings.hidden = false;
+  keyInput.focus();
+}
+
+function closeSettings() {
+  settings.hidden = true;
+  settingsOpen.focus();
+}
+
+settingsOpen.addEventListener("click", openSettings);
+document.querySelector("#settings-close").addEventListener("click", closeSettings);
+settings.addEventListener("click", (event) => {
+  if (event.target === settings) closeSettings();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !settings.hidden) closeSettings();
+});
+
 document.querySelector("#key-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   keyNote.textContent = "Проверяю ключ…";
@@ -360,7 +385,9 @@ document.querySelector("#key-form").addEventListener("submit", async (event) => 
     }));
     keyInput.value = "";
     keyNote.textContent = "Ключ сохранён на этом компьютере.";
+    closeSettings();
     await refreshAll();
+    if (!lastRender || !lastRender.error) setBanner("Ключ сохранён на этом компьютере.");
   } catch (error) {
     keyNote.textContent = error.message;
   }
