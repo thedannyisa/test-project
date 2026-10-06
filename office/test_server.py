@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import sqlite3
 import threading
 import unittest
 import urllib.error
@@ -126,6 +127,7 @@ class OfficeTests(unittest.TestCase):
     def setUp(self) -> None:
         server.delete_key()
         Path(os.environ["OFFICE_CATS_PATH"]).unlink(missing_ok=True)
+        os.environ.pop("OFFICE_CURSOR_STATE_DB", None)
         FakeCursor.mode = "ok"
         FakeCursor.seen_auth = []
 
@@ -319,6 +321,87 @@ class OfficeTests(unittest.TestCase):
             self.assertNotIn(full_key, json.dumps(payload))
         finally:
             usage.shutdown()
+            os.environ.pop("OFFICE_USAGE_SUMMARY_URL", None)
+            os.environ.pop("OFFICE_GROK_USAGE_URL", None)
+            server.delete_key()
+
+    def test_limits_use_local_cursor_login_without_leaking_it(self) -> None:
+        secret = "office-session-secret"
+        payload = base64.urlsafe_b64encode(json.dumps({"sub": "user_office"}).encode()).decode().rstrip("=")
+        token = f"aaa.{payload}.{secret}"
+        database = self.key_path.with_name("cursor-office-state.vscdb")
+        connection = sqlite3.connect(database)
+        connection.execute("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)")
+        connection.execute(
+            "INSERT INTO ItemTable (key, value) VALUES (?, ?)",
+            ("cursorAuth/accessToken", token),
+        )
+        connection.commit()
+        connection.close()
+
+        class Usage(BaseHTTPRequestHandler):
+            seen_cookie = ""
+            seen_auth = ""
+
+            def log_message(self, fmt: str, *args) -> None:
+                return
+
+            def _send(self, payload: dict, status: int = 200) -> None:
+                body = json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _guard(self) -> bool:
+                Usage.seen_cookie = self.headers.get("Cookie") or ""
+                Usage.seen_auth = self.headers.get("Authorization") or ""
+                if "WorkosCursorSessionToken=" not in Usage.seen_cookie:
+                    self._send({"error": "not_authenticated"}, 401)
+                    return False
+                return True
+
+            def do_GET(self) -> None:  # noqa: N802
+                if not self._guard():
+                    return
+                self._send({
+                    "billingCycleEnd": "2099-06-01T12:00:00.000Z",
+                    "individualUsage": {"plan": {"autoPercentUsed": 11, "apiPercentUsed": 22}},
+                })
+
+            def do_POST(self) -> None:  # noqa: N802
+                if not self._guard():
+                    return
+                self._send({
+                    "usagePercent": 33,
+                    "hasNonZeroIncludedLimit": True,
+                    "nextResetTimestampUtc": "2099-05-20T00:00:00.000Z",
+                })
+
+        usage = ThreadingHTTPServer(("127.0.0.1", 0), Usage)
+        threading.Thread(target=usage.serve_forever, daemon=True).start()
+        port = usage.server_address[1]
+        os.environ["OFFICE_CURSOR_STATE_DB"] = str(database)
+        os.environ["OFFICE_USAGE_SUMMARY_URL"] = f"http://127.0.0.1:{port}/api/usage-summary"
+        os.environ["OFFICE_GROK_USAGE_URL"] = f"http://127.0.0.1:{port}/grok"
+        try:
+            status, saved = self.request("POST", "/api/key", {"apiKey": "crsr_" + ("e" * 40)})
+            self.assertEqual(status, 200, saved)
+            status, payload = self.request("GET", "/api/limits")
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["cursorModels"]["usedPercent"], 11.0)
+            self.assertEqual(payload["otherModels"]["usedPercent"], 22.0)
+            self.assertEqual(payload["grokBot"]["usedPercent"], 33.0)
+            encoded = json.dumps(payload)
+            self.assertNotIn(secret, encoded)
+            self.assertNotIn(token, encoded)
+            self.assertIn("%3A%3A", Usage.seen_cookie)
+            self.assertNotIn(secret, Usage.seen_auth)
+        finally:
+            usage.shutdown()
+            database.unlink(missing_ok=True)
+            os.environ.pop("OFFICE_CURSOR_STATE_DB", None)
             os.environ.pop("OFFICE_USAGE_SUMMARY_URL", None)
             os.environ.pop("OFFICE_GROK_USAGE_URL", None)
             server.delete_key()

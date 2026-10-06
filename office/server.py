@@ -11,6 +11,9 @@ import json
 import math
 import os
 import re
+import shutil
+import sqlite3
+import tempfile
 import threading
 import urllib.error
 import urllib.parse
@@ -519,10 +522,121 @@ def parse_grok_status(payload: dict | None) -> tuple[dict, dict]:
     return meter, reset
 
 
+def cursor_state_paths() -> list[Path]:
+    override = os.environ.get("OFFICE_CURSOR_STATE_DB")
+    if override:
+        return [Path(override)]
+    home = Path.home()
+    return [
+        home / "Library/Application Support/Cursor/User/globalStorage/state.vscdb",
+        home / ".config/Cursor/User/globalStorage/state.vscdb",
+        home / "AppData/Roaming/Cursor/User/globalStorage/state.vscdb",
+    ]
+
+
+def _jwt_sub(token: str) -> str:
+    parts = token.split(".")
+    if len(parts) < 2:
+        return ""
+    try:
+        padding = "=" * (-len(parts[1]) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(parts[1] + padding))
+    except (ValueError, json.JSONDecodeError):
+        return ""
+    subject = payload.get("sub") if isinstance(payload, dict) else ""
+    return subject if isinstance(subject, str) else ""
+
+
+def _query_access_token(path: Path) -> str:
+    uri = path.resolve().as_uri() + "?mode=ro"
+    try:
+        connection = sqlite3.connect(uri, uri=True, timeout=1)
+    except sqlite3.Error:
+        return ""
+    try:
+        row = connection.execute(
+            "SELECT value FROM ItemTable WHERE key = ?",
+            ("cursorAuth/accessToken",),
+        ).fetchone()
+    except sqlite3.Error:
+        return ""
+    finally:
+        connection.close()
+    if not row or row[0] in (None, ""):
+        return ""
+    value = row[0]
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", "replace")
+    token = str(value).strip().strip('"')
+    return token if _jwt_sub(token) else ""
+
+
+def _read_cursor_access_token() -> str:
+    for path in cursor_state_paths():
+        if not path.is_file():
+            continue
+        token = _query_access_token(path)
+        if token:
+            return token
+        temp_path = ""
+        try:
+            handle, temp_path = tempfile.mkstemp(prefix="cursor-office-state-")
+            os.close(handle)
+            shutil.copy2(path, temp_path)
+            token = _query_access_token(Path(temp_path))
+        except OSError:
+            token = ""
+        finally:
+            if temp_path:
+                Path(temp_path).unlink(missing_ok=True)
+        if token:
+            return token
+    return ""
+
+
+def cursor_session_cookie() -> str:
+    """Cookie for the dashboard usage endpoints. Never log or return this value."""
+    token = _read_cursor_access_token()
+    subject = _jwt_sub(token)
+    if not subject:
+        return ""
+    return urllib.parse.quote(f"{subject}::{token}", safe="")
+
+
+def _cookie_allowed(url: str) -> bool:
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    return host in {"cursor.com", "www.cursor.com", "127.0.0.1", "localhost"}
+
+
+def _open_usage_json(request: urllib.request.Request) -> dict | None:
+    try:
+        with _USAGE_OPENER.open(request, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(payload, dict) or payload.get("error") in {"not_authenticated", "unauthorized"}:
+        return None
+    return payload
+
+
 def _read_authorized_json(api_key: str, url: str, method: str = "GET", body: dict | None = None) -> dict | None:
     raw = None if body is None else json.dumps(body).encode("utf-8")
+    cookie = cursor_session_cookie() if _cookie_allowed(url) else ""
+    if cookie:
+        found = _open_usage_json(urllib.request.Request(
+            url,
+            data=raw,
+            method=method,
+            headers={
+                "Cookie": f"WorkosCursorSessionToken={cookie}",
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+        ))
+        if found is not None:
+            return found
     for scheme in ("bearer", "basic"):
-        request = urllib.request.Request(
+        found = _open_usage_json(urllib.request.Request(
             url,
             data=raw,
             method=method,
@@ -531,19 +645,22 @@ def _read_authorized_json(api_key: str, url: str, method: str = "GET", body: dic
                 "Accept": "application/json",
                 "Content-Type": "application/json",
             },
-        )
-        try:
-            with _USAGE_OPENER.open(request, timeout=8) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
-            continue
-        if isinstance(payload, dict):
-            return payload
+        ))
+        if found is not None:
+            return found
     return None
+
+
+def _note_missing_limits(limits: dict, reason: str) -> None:
+    for key in ("cursorModels", "otherModels", "grokBot", "reset", "grokReset"):
+        meter = limits[key]
+        if not meter["available"] and meter.get("reason") in (None, "", "Недоступно"):
+            meter["reason"] = reason
 
 
 def fetch_limits(api_key: str) -> dict:
     limits = _blank_limits(True)
+    signed_in = bool(cursor_session_cookie())
     summary_urls = [
         os.environ.get("OFFICE_USAGE_SUMMARY_URL", "https://cursor.com/api/usage-summary"),
         API_ROOT + "/v1/usage-summary",
@@ -564,6 +681,11 @@ def fetch_limits(api_key: str) -> dict:
     )
     limits["grokBot"] = grok_meter
     limits["grokReset"] = grok_reset
+    if not any(limits[key]["available"] for key in ("cursorModels", "otherModels", "grokBot", "reset")):
+        _note_missing_limits(
+            limits,
+            "Нет входа Cursor на этом компьютере" if not signed_in else "Cursor не отдал цифры",
+        )
     return limits
 
 

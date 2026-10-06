@@ -253,7 +253,8 @@ function renderMeter(key, meter) {
     const note = meter.level === "empty" ? "Лимит закончился" : meter.level === "hot" ? "Почти всё потрачено" : copy.hint;
     sub.textContent = left + " · " + note;
   } else {
-    sub.textContent = (meter && meter.reason) || "Недоступно";
+    const reason = (meter && meter.reason) || "";
+    sub.textContent = reason && reason !== "Недоступно" ? reason : "";
   }
   block.append(top, cells(meter && meter.available ? meter.usedPercent : null), sub);
   return block;

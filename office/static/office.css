@@ -101,11 +101,10 @@ h1 {
 
 .studio {
   display: grid;
-  grid-template-columns: 104px minmax(0, 1fr) 104px;
+  grid-template-columns: 96px minmax(0, 1fr) 220px;
   grid-template-areas:
-    "left board right"
-    "left floor right"
-    "sofa floor coffee";
+    "left floor side"
+    "sofa floor side";
   gap: 10px;
   padding: 12px;
   background:
@@ -115,8 +114,13 @@ h1 {
 }
 
 .deco.left { grid-area: left; }
-.deco.right { grid-area: right; }
-.board { grid-area: board; }
+.side {
+  grid-area: side;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
 .floor { grid-area: floor; }
 .sofa { grid-area: sofa; }
 
@@ -213,31 +217,32 @@ h1 {
 }
 .cushion { width: 22px; height: 14px; background: #e7b4cf; border: 2px solid #1a120e; }
 
-.board { background: #121820; padding: 8px; min-width: 0; }
+.board { background: #121820; padding: 6px; min-width: 0; }
 .board.tense { box-shadow: 4px 4px 0 #5a1d1d, inset 0 0 0 2px #ff7a68; }
 .board.spent { background: #2a1214; }
 .board-bezel { min-width: 0; }
 h2 {
-  margin: 4px 0 10px;
-  font-size: 16px;
-  line-height: 1.35;
-  letter-spacing: 0.04em;
+  margin: 2px 0 6px;
+  font-size: 13px;
+  line-height: 1.25;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
-.meters { display: grid; gap: 10px; }
+.meters { display: grid; gap: 6px; }
 .meter { min-width: 0; }
 .meter-top, .meter-sub, .reset p {
   display: flex;
   justify-content: space-between;
-  gap: 8px;
-  margin: 0 0 4px;
-  font-size: 13px;
+  gap: 6px;
+  margin: 0 0 3px;
+  font-size: 11px;
 }
 .meter-sub, .reset p { color: var(--muted); }
 .bar {
   display: grid;
   grid-template-columns: repeat(16, 1fr);
-  gap: 3px;
-  height: 14px;
+  gap: 2px;
+  height: 8px;
 }
 .cell { background: #2a3140; border: 1px solid #0c0e14; }
 .meter.ok .cell.on { background: var(--ok); }
@@ -245,7 +250,8 @@ h2 {
 .meter.hot .cell.on, .meter.empty .cell.on { background: var(--hot); }
 .meter.hot .bar, .meter.empty .bar { animation: alarm 0.8s steps(2) infinite; }
 .meter.unknown .cell { background: #3a3a42; }
-.reset { margin-top: 10px; border-top: 3px solid #2c3548; padding-top: 8px; }
+.reset { margin-top: 6px; border-top: 2px solid #2c3548; padding-top: 6px; }
+.meter-sub:empty { display: none; }
 
 .floor {
   min-height: 240px;
@@ -487,10 +493,9 @@ button {
   .studio {
     grid-template-columns: 1fr;
     grid-template-areas:
-      "board"
       "floor"
+      "side"
       "left"
-      "right"
       "sofa";
   }
   .deco { display: flex; gap: 8px; align-items: end; }
