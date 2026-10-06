@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Офис Cursor</title>
+  <link rel="stylesheet" href="/office.css">
+</head>
+<body>
+  <div class="app">
+    <header class="wall">
+      <div class="brand">
+        <p class="eyebrow">Cursor</p>
+        <h1>Офис</h1>
+        <p id="summary" class="summary">Смотрю, кто на месте…</p>
+      </div>
+      <div class="window" aria-hidden="true">
+        <div class="sky">
+          <span class="cloud c1"></span>
+          <span class="cloud c2"></span>
+        </div>
+      </div>
+      <div class="clock-card">
+        <p id="clock" class="clock">--:--</p>
+        <p class="clock-caption">местное время</p>
+      </div>
+    </header>
+
+    <div id="banner" class="banner" hidden></div>
+
+    <main id="floor" class="floor" aria-live="polite"></main>
+
+    <aside class="panel">
+      <form id="key-form">
+        <label for="api-key">Ключ Cursor</label>
+        <input id="api-key" name="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Вставь ключ из Dashboard → API Keys">
+        <div class="row">
+          <button type="submit" class="primary">Посадить своих</button>
+          <button type="button" id="forget" class="quiet">Забыть ключ</button>
+        </div>
+        <p id="key-note" class="note">Ключ остаётся на этом компьютере и в чат не уходит.</p>
+      </form>
+      <ul class="legend">
+        <li><span class="dot working"></span> печатает — агент работает</li>
+        <li><span class="dot resting"></span> отошёл — задача закончилась</li>
+        <li><span class="dot away"></span> пустой стол — агент в архиве</li>
+      </ul>
+      <div class="row">
+        <button type="button" id="refresh" class="quiet">Обновить</button>
+        <button type="button" id="shutdown" class="quiet">Закрыть офис</button>
+      </div>
+    </aside>
+  </div>
+  <script src="/office.js"></script>
+</body>
+</html>
