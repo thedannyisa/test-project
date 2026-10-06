@@ -260,6 +260,35 @@ function renderMeter(key, meter) {
   return block;
 }
 
+function renderSubscription(subscription) {
+  const line = document.createElement("p");
+  line.className = "subscription";
+  if (!subscription || subscription.available !== true) {
+    line.textContent = "Окончание подписки: " + ((subscription && subscription.reason) || "Недоступно");
+    return line;
+  }
+  const plan = subscription.plan ? " " + subscription.plan : "";
+  if (subscription.renews) {
+    line.textContent = "Подписка" + plan + " продлевается сама. Даты окончания нет.";
+    return line;
+  }
+  if (subscription.at) {
+    line.textContent = "Подписка" + plan + " закончится: " + formatReset({
+      available: true,
+      days: subscription.days,
+      at: subscription.at,
+    });
+    return line;
+  }
+  if (subscription.days != null) {
+    const days = subscription.days === 0 ? "сегодня" : subscription.days + " дн.";
+    line.textContent = "Пробный период" + plan + ": " + days;
+    return line;
+  }
+  line.textContent = "Окончание подписки: " + (subscription.reason || "Недоступно");
+  return line;
+}
+
 function formatReset(reset) {
   if (!reset || !reset.available || reset.at == null) return (reset && reset.reason) || "Недоступно";
   const when = new Intl.DateTimeFormat("ru-RU", {
@@ -290,7 +319,7 @@ function renderLimits(payload) {
   );
   const main = document.createElement("p");
   main.textContent = "До следующего сброса: " + formatReset(source.reset);
-  resetBox.append(main);
+  resetBox.append(main, renderSubscription(source.subscription));
   if (source.grokReset && source.grokReset.available) {
     const grok = document.createElement("p");
     grok.textContent = "Сброс Grok Bot: " + formatReset(source.grokReset);

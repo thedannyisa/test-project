@@ -408,6 +408,14 @@ def _blank_limits(configured: bool) -> dict:
         "grokBot": dict(meter),
         "reset": reset,
         "grokReset": dict(reset),
+        "subscription": {
+            "available": False,
+            "plan": "",
+            "renews": None,
+            "days": None,
+            "at": None,
+            "reason": reason,
+        },
     }
 
 
@@ -499,6 +507,92 @@ def parse_usage_summary(payload: dict | None) -> tuple[dict, dict, dict]:
         other_meter = _meter(other_used)
     reset = _reset_from_timestamp(payload.get("billingCycleEnd"))
     return cursor_meter, other_meter, reset
+
+
+_PLAN_LABELS = {
+    "pro": "Pro",
+    "pro_plus": "Pro+",
+    "ultra": "Ultra",
+    "free": "Free",
+    "hobby": "Hobby",
+    "enterprise": "Enterprise",
+    "business": "Business",
+    "team": "Teams",
+}
+
+
+def _blank_subscription(reason: str = "Недоступно") -> dict:
+    return {
+        "available": False,
+        "plan": "",
+        "renews": None,
+        "days": None,
+        "at": None,
+        "reason": reason,
+    }
+
+
+def _plan_label(payload: dict) -> str:
+    raw = payload.get("membershipType") or payload.get("individualMembershipType") or ""
+    if not isinstance(raw, str):
+        return ""
+    return _PLAN_LABELS.get(raw.strip().lower(), "")
+
+
+def parse_subscription(payload: dict | None) -> dict:
+    """Subscription end comes only from Cursor's own cancellation or trial fields.
+
+    billingCycleEnd is the limit reset, so it is never copied here.
+    An active plan with no cancellation date has no end date: it renews.
+    """
+    if not isinstance(payload, dict):
+        return _blank_subscription()
+    plan = _plan_label(payload)
+    cancel_raw = payload.get("pendingCancellationDate")
+    cancel = _blank_reset() if cancel_raw in (None, "", 0, "0") else _reset_from_timestamp(cancel_raw)
+    if cancel["available"]:
+        return {
+            "available": True,
+            "plan": plan,
+            "renews": False,
+            "days": cancel["days"],
+            "at": cancel["at"],
+            "reason": None,
+        }
+    trial_raw = payload.get("daysRemainingOnTrial")
+    try:
+        trial_days = int(trial_raw) if trial_raw not in (None, "") else 0
+    except (TypeError, ValueError):
+        trial_days = 0
+    status = str(payload.get("subscriptionStatus") or "").strip().lower()
+    if trial_days > 0 or status == "trialing":
+        return {
+            "available": True,
+            "plan": plan,
+            "renews": False,
+            "days": trial_days if trial_days > 0 else None,
+            "at": None,
+            "reason": None if trial_days > 0 else "Дата окончания пробного периода не пришла",
+        }
+    if status in {"active", "past_due"}:
+        return {
+            "available": True,
+            "plan": plan,
+            "renews": True,
+            "days": None,
+            "at": None,
+            "reason": None,
+        }
+    if status:
+        return {
+            "available": True,
+            "plan": plan,
+            "renews": False,
+            "days": None,
+            "at": None,
+            "reason": "Дата окончания не пришла",
+        }
+    return _blank_subscription()
 
 
 def parse_grok_status(payload: dict | None) -> tuple[dict, dict]:
@@ -681,6 +775,14 @@ def fetch_limits(api_key: str) -> dict:
     )
     limits["grokBot"] = grok_meter
     limits["grokReset"] = grok_reset
+    stripe_url = os.environ.get("OFFICE_STRIPE_URL", "https://cursor.com/api/auth/stripe").strip()
+    if stripe_url:
+        subscription = parse_subscription(_read_authorized_json(api_key, stripe_url))
+        if not subscription["available"]:
+            subscription["reason"] = (
+                "Нет входа Cursor на этом компьютере" if not signed_in else "Cursor не отдал срок подписки"
+            )
+        limits["subscription"] = subscription
     if not any(limits[key]["available"] for key in ("cursorModels", "otherModels", "grokBot", "reset")):
         _note_missing_limits(
             limits,

@@ -128,6 +128,7 @@ class OfficeTests(unittest.TestCase):
         server.delete_key()
         Path(os.environ["OFFICE_CATS_PATH"]).unlink(missing_ok=True)
         os.environ.pop("OFFICE_CURSOR_STATE_DB", None)
+        os.environ["OFFICE_STRIPE_URL"] = ""
         FakeCursor.mode = "ok"
         FakeCursor.seen_auth = []
 
@@ -277,6 +278,39 @@ class OfficeTests(unittest.TestCase):
         self.assertFalse(missing["available"])
         self.assertEqual(missing["reason"], "Нет недельного лимита")
 
+    def test_subscription_end_is_not_the_limit_reset(self) -> None:
+        ending = server.parse_subscription({
+            "membershipType": "pro",
+            "subscriptionStatus": "active",
+            "pendingCancellationDate": "2099-01-15T00:00:00.000Z",
+            "daysRemainingOnTrial": 0,
+            "billingCycleEnd": "2099-02-01T00:00:00.000Z",
+        })
+        self.assertTrue(ending["available"])
+        self.assertFalse(ending["renews"])
+        self.assertEqual(ending["plan"], "Pro")
+        self.assertGreater(ending["days"], 0)
+        self.assertTrue(str(ending["at"]).startswith("2099-01-15"))
+        renewing = server.parse_subscription({
+            "membershipType": "ultra",
+            "subscriptionStatus": "active",
+            "pendingCancellationDate": "",
+            "daysRemainingOnTrial": 0,
+        })
+        self.assertTrue(renewing["renews"])
+        self.assertEqual(renewing["plan"], "Ultra")
+        self.assertIsNone(renewing["at"])
+        self.assertIsNone(renewing["days"])
+        trial = server.parse_subscription({
+            "subscriptionStatus": "trialing",
+            "daysRemainingOnTrial": 4,
+            "pendingCancellationDate": "",
+        })
+        self.assertEqual(trial["days"], 4)
+        self.assertIsNone(trial["at"])
+        self.assertFalse(trial["renews"])
+        self.assertFalse(server.parse_subscription(None)["available"])
+
     def test_limits_endpoint_uses_usage_api_without_leaking_key(self) -> None:
         class Usage(BaseHTTPRequestHandler):
             def log_message(self, fmt: str, *args) -> None:
@@ -365,6 +399,14 @@ class OfficeTests(unittest.TestCase):
             def do_GET(self) -> None:  # noqa: N802
                 if not self._guard():
                     return
+                if urllib.parse.urlsplit(self.path).path.endswith("/stripe"):
+                    self._send({
+                        "membershipType": "pro",
+                        "subscriptionStatus": "active",
+                        "pendingCancellationDate": "",
+                        "daysRemainingOnTrial": 0,
+                    })
+                    return
                 self._send({
                     "billingCycleEnd": "2099-06-01T12:00:00.000Z",
                     "individualUsage": {"plan": {"autoPercentUsed": 11, "apiPercentUsed": 22}},
@@ -385,6 +427,7 @@ class OfficeTests(unittest.TestCase):
         os.environ["OFFICE_CURSOR_STATE_DB"] = str(database)
         os.environ["OFFICE_USAGE_SUMMARY_URL"] = f"http://127.0.0.1:{port}/api/usage-summary"
         os.environ["OFFICE_GROK_USAGE_URL"] = f"http://127.0.0.1:{port}/grok"
+        os.environ["OFFICE_STRIPE_URL"] = f"http://127.0.0.1:{port}/stripe"
         try:
             status, saved = self.request("POST", "/api/key", {"apiKey": "crsr_" + ("e" * 40)})
             self.assertEqual(status, 200, saved)
@@ -393,6 +436,10 @@ class OfficeTests(unittest.TestCase):
             self.assertEqual(payload["cursorModels"]["usedPercent"], 11.0)
             self.assertEqual(payload["otherModels"]["usedPercent"], 22.0)
             self.assertEqual(payload["grokBot"]["usedPercent"], 33.0)
+            self.assertTrue(payload["subscription"]["renews"])
+            self.assertEqual(payload["subscription"]["plan"], "Pro")
+            self.assertIsNone(payload["subscription"]["at"])
+            self.assertNotEqual(payload["subscription"]["at"], payload["reset"]["at"])
             encoded = json.dumps(payload)
             self.assertNotIn(secret, encoded)
             self.assertNotIn(token, encoded)
@@ -404,6 +451,7 @@ class OfficeTests(unittest.TestCase):
             os.environ.pop("OFFICE_CURSOR_STATE_DB", None)
             os.environ.pop("OFFICE_USAGE_SUMMARY_URL", None)
             os.environ.pop("OFFICE_GROK_USAGE_URL", None)
+            os.environ["OFFICE_STRIPE_URL"] = ""
             server.delete_key()
 
 

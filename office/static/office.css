@@ -251,6 +251,8 @@ h2 {
 .meter.hot .bar, .meter.empty .bar { animation: alarm 0.8s steps(2) infinite; }
 .meter.unknown .cell { background: #3a3a42; }
 .reset { margin-top: 6px; border-top: 2px solid #2c3548; padding-top: 6px; }
+.reset p { display: block; overflow-wrap: anywhere; }
+.subscription { margin-top: 4px; }
 .meter-sub:empty { display: none; }
 
 .floor {
