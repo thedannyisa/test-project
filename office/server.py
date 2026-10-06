@@ -6,6 +6,7 @@ The API key stays on this computer. The server listens only on 127.0.0.1.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import threading
@@ -111,18 +112,40 @@ def public_agent(item: dict) -> dict:
     }
 
 
-def fetch_agents(api_key: str, limit: int = 100, pages: int = MAX_PAGES) -> list[dict]:
-    items: list[dict] = []
-    cursor = None
-    for _ in range(pages):
-        query = {"limit": str(limit), "includeArchived": "true"}
-        if cursor:
-            query["cursor"] = cursor
-        url = API_ROOT + "/v1/agents?" + urllib.parse.urlencode(query)
+TRUNCATED_KEY = (
+    "Это короткий кусок из таблицы, не весь ключ. "
+    "Нажми Add, создай ключ и скопируй длинную строку, которую Cursor покажет один раз."
+)
+
+
+def clean_key(value: str) -> str:
+    key = value.strip().strip("\"'")
+    key = "".join(key.split())
+    return key
+
+
+def key_problem(key: str) -> str | None:
+    if not key:
+        return "Вставь ключ целиком, одной строкой"
+    if "..." in key or "…" in key or len(key) < 25:
+        return TRUNCATED_KEY
+    return None
+
+
+def authorization_value(api_key: str, scheme: str) -> str:
+    if scheme == "basic":
+        token = base64.b64encode(f"{api_key}:".encode()).decode("ascii")
+        return f"Basic {token}"
+    return f"Bearer {api_key}"
+
+
+def cursor_get(api_key: str, path: str) -> dict:
+    refused: CursorApiError | None = None
+    for scheme in ("basic", "bearer"):
         request = urllib.request.Request(
-            url,
+            API_ROOT + path,
             headers={
-                "Authorization": f"Bearer {api_key}",
+                "Authorization": authorization_value(api_key, scheme),
                 "Accept": "application/json",
             },
         )
@@ -141,9 +164,28 @@ def fetch_agents(api_key: str, limit: int = 100, pages: int = MAX_PAGES) -> list
                 detail = detail.get("message") or ""
             if isinstance(detail, str) and detail.strip():
                 message = f"{message}: {detail.strip()[:180]}"
-            raise CursorApiError(exc.code, message) from exc
+            error = CursorApiError(exc.code, message)
+            if exc.code in {401, 403}:
+                refused = error
+                continue
+            raise error from exc
         except urllib.error.URLError as exc:
             raise CursorApiError(0, "Не получилось достучаться до Cursor") from exc
+        if not isinstance(payload, dict):
+            raise CursorApiError(502, "Cursor ответил непонятно")
+        return payload
+    assert refused is not None
+    raise refused
+
+
+def fetch_agents(api_key: str, limit: int = 100, pages: int = MAX_PAGES) -> list[dict]:
+    items: list[dict] = []
+    cursor = None
+    for _ in range(pages):
+        query = {"limit": str(limit), "includeArchived": "true"}
+        if cursor:
+            query["cursor"] = cursor
+        payload = cursor_get(api_key, "/v1/agents?" + urllib.parse.urlencode(query))
         batch = payload.get("items") or []
         if isinstance(batch, list):
             items.extend(item for item in batch if isinstance(item, dict))
@@ -153,6 +195,10 @@ def fetch_agents(api_key: str, limit: int = 100, pages: int = MAX_PAGES) -> list
     agents = [public_agent(item) for item in items]
     agents.sort(key=lambda agent: ({"working": 0, "resting": 1, "away": 2}[agent["pose"]], agent["name"]))
     return agents
+
+
+def check_key(api_key: str) -> None:
+    cursor_get(api_key, "/v1/me")
 
 
 def office_payload() -> dict:
@@ -205,15 +251,20 @@ class OfficeHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "Нет такой страницы"}, status=404)
             return
         payload = self._read_json()
-        key = str(payload.get("apiKey") or "").strip()
-        if not key or any(char in key for char in "\r\n\x00"):
-            self._send_json({"ok": False, "error": "Вставь ключ целиком, одной строкой"}, status=400)
+        key = clean_key(str(payload.get("apiKey") or ""))
+        problem = key_problem(key)
+        if problem:
+            self._send_json({"ok": False, "error": problem}, status=400)
             return
         try:
-            fetch_agents(key, limit=1, pages=1)
+            check_key(key)
         except CursorApiError as exc:
             status = 401 if exc.status in {401, 403} else 502
-            message = "Ключ не подошёл" if exc.status in {401, 403} else exc.message
+            message = (
+                "Cursor не принял этот ключ. Нажми Add и скопируй новый ключ сразу, целиком."
+                if exc.status in {401, 403}
+                else exc.message
+            )
             self._send_json({"ok": False, "error": message}, status=status)
             return
         write_key(key)

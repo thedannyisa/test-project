@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import threading
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -23,7 +25,28 @@ class FakeCursor(BaseHTTPRequestHandler):
         return
 
     def do_GET(self) -> None:  # noqa: N802
-        self.seen_auth.append(self.headers.get("Authorization") or "")
+        auth = self.headers.get("Authorization") or ""
+        self.seen_auth.append(auth)
+        if self.mode == "bearer-only" and not auth.startswith("Bearer "):
+            body = json.dumps({"message": "use bearer"}).encode()
+            self.send_response(401)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if urllib.parse.urlsplit(self.path).path == "/v1/me":
+            if self.mode == "deny":
+                body = json.dumps({"message": "bad key"}).encode()
+                self.send_response(401)
+            else:
+                body = json.dumps({"apiKeyName": "test"}).encode()
+                self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.mode == "deny":
             body = json.dumps({"message": "bad key"}).encode()
             self.send_response(401)
@@ -130,24 +153,39 @@ class OfficeTests(unittest.TestCase):
         self.assertEqual(poses, ["working", "working", "resting", "away"])
 
     def test_key_roundtrip_hides_secret_and_paginates(self) -> None:
-        status, saved = self.request("POST", "/api/key", {"apiKey": "secret-key"})
+        full_key = "crsr_" + ("a" * 40)
+        status, saved = self.request("POST", "/api/key", {"apiKey": f"  {full_key}  "})
         self.assertEqual(status, 200, saved)
-        self.assertEqual(self.key_path.read_text(encoding="utf-8").strip(), "secret-key")
+        self.assertEqual(self.key_path.read_text(encoding="utf-8").strip(), full_key)
         self.assertEqual(self.key_path.stat().st_mode & 0o777, 0o600)
         status, office = self.request("GET", "/api/office")
         self.assertEqual(status, 200)
-        self.assertNotIn("secret-key", json.dumps(office))
+        self.assertNotIn(full_key, json.dumps(office))
         self.assertEqual([item["pose"] for item in office["agents"]], ["working", "resting", "away"])
-        self.assertTrue(all(header == "Bearer secret-key" for header in FakeCursor.seen_auth))
+        expected = "Basic " + base64.b64encode(b"crsr_" + b"a" * 40 + b":").decode()
+        self.assertTrue(all(header == expected for header in FakeCursor.seen_auth))
         names = [item["name"] for item in office["agents"]]
         self.assertIn("<img src=x onerror=alert(1)>", names)
 
     def test_bad_key_is_rejected(self) -> None:
         FakeCursor.mode = "deny"
-        status, payload = self.request("POST", "/api/key", {"apiKey": "nope"})
+        status, payload = self.request("POST", "/api/key", {"apiKey": "crsr_" + ("b" * 40)})
         self.assertEqual(status, 401)
-        self.assertIn("не подошёл", payload["error"])
+        self.assertIn("не принял", payload["error"])
         self.assertFalse(self.key_path.exists())
+
+    def test_table_snippet_is_rejected_before_cursor(self) -> None:
+        status, payload = self.request("POST", "/api/key", {"apiKey": "crsr_...86c2"})
+        self.assertEqual(status, 400)
+        self.assertIn("Add", payload["error"])
+        self.assertEqual(FakeCursor.seen_auth, [])
+
+    def test_bearer_is_used_when_basic_is_refused(self) -> None:
+        FakeCursor.mode = "bearer-only"
+        full_key = "crsr_" + ("c" * 40)
+        status, saved = self.request("POST", "/api/key", {"apiKey": full_key})
+        self.assertEqual(status, 200, saved)
+        self.assertTrue(any(header.startswith("Bearer ") for header in FakeCursor.seen_auth))
 
     def test_page_has_office(self) -> None:
         status, html = self.request("GET", "/")
