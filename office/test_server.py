@@ -191,7 +191,89 @@ class OfficeTests(unittest.TestCase):
         status, html = self.request("GET", "/")
         self.assertEqual(status, 200)
         self.assertIn("Офис", html)
+        self.assertIn("ЛИМИТЫ", html)
         self.assertIn("/office.js", html)
+
+    def test_limits_without_key_are_unavailable(self) -> None:
+        status, payload = self.request("GET", "/api/limits")
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["configured"])
+        self.assertFalse(payload["cursorModels"]["available"])
+        self.assertIsNone(payload["cursorModels"]["usedPercent"])
+        self.assertNotIn("crsr_", json.dumps(payload))
+
+    def test_limits_parse_real_fields_and_skip_missing_ones(self) -> None:
+        cursor_meter, other_meter, reset = server.parse_usage_summary({
+            "billingCycleEnd": "2099-01-15T00:00:00.000Z",
+            "individualUsage": {"plan": {"autoPercentUsed": 42.5, "apiPercentUsed": 7}},
+        })
+        self.assertEqual(cursor_meter["usedPercent"], 42.5)
+        self.assertEqual(cursor_meter["remainingPercent"], 57.5)
+        self.assertEqual(other_meter["usedPercent"], 7.0)
+        self.assertTrue(reset["available"])
+        self.assertGreater(reset["days"], 0)
+        empty_cursor, empty_other, empty_reset = server.parse_usage_summary({})
+        self.assertFalse(empty_cursor["available"])
+        self.assertFalse(empty_other["available"])
+        self.assertFalse(empty_reset["available"])
+        grok, grok_reset = server.parse_grok_status({
+            "usagePercent": 91,
+            "hasNonZeroIncludedLimit": True,
+            "nextResetTimestampUtc": "2099-01-08T00:00:00.000Z",
+        })
+        self.assertEqual(grok["level"], "hot")
+        self.assertTrue(grok_reset["available"])
+        missing, _reset = server.parse_grok_status({"includedLimitZero": True})
+        self.assertFalse(missing["available"])
+        self.assertEqual(missing["reason"], "Нет недельного лимита")
+
+    def test_limits_endpoint_uses_usage_api_without_leaking_key(self) -> None:
+        class Usage(BaseHTTPRequestHandler):
+            def log_message(self, fmt: str, *args) -> None:
+                return
+
+            def _send(self, payload: dict) -> None:
+                body = json.dumps(payload).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self) -> None:  # noqa: N802
+                self._send({
+                    "billingCycleEnd": "2099-06-01T12:00:00.000Z",
+                    "individualUsage": {"plan": {"autoPercentUsed": 42.5, "apiPercentUsed": 7}},
+                })
+
+            def do_POST(self) -> None:  # noqa: N802
+                self._send({
+                    "usagePercent": 91,
+                    "hasNonZeroIncludedLimit": True,
+                    "nextResetTimestampUtc": "2099-05-20T00:00:00.000Z",
+                })
+
+        usage = ThreadingHTTPServer(("127.0.0.1", 0), Usage)
+        threading.Thread(target=usage.serve_forever, daemon=True).start()
+        port = usage.server_address[1]
+        os.environ["OFFICE_USAGE_SUMMARY_URL"] = f"http://127.0.0.1:{port}/api/usage-summary"
+        os.environ["OFFICE_GROK_USAGE_URL"] = f"http://127.0.0.1:{port}/grok"
+        full_key = "crsr_" + ("d" * 40)
+        try:
+            status, saved = self.request("POST", "/api/key", {"apiKey": full_key})
+            self.assertEqual(status, 200, saved)
+            status, payload = self.request("GET", "/api/limits")
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["cursorModels"]["usedPercent"], 42.5)
+            self.assertEqual(payload["otherModels"]["remainingPercent"], 93.0)
+            self.assertEqual(payload["grokBot"]["usedPercent"], 91.0)
+            self.assertEqual(payload["grokBot"]["level"], "hot")
+            self.assertNotIn(full_key, json.dumps(payload))
+        finally:
+            usage.shutdown()
+            os.environ.pop("OFFICE_USAGE_SUMMARY_URL", None)
+            os.environ.pop("OFFICE_GROK_USAGE_URL", None)
+            server.delete_key()
 
 
 if __name__ == "__main__":

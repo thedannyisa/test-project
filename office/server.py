@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import os
+import re
 import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -201,6 +204,210 @@ def check_key(api_key: str) -> None:
     cursor_get(api_key, "/v1/me")
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
+_USAGE_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def _blank_meter() -> dict:
+    return {
+        "available": False,
+        "usedPercent": None,
+        "remainingPercent": None,
+        "level": "unknown",
+        "reason": "Недоступно",
+    }
+
+
+def _blank_reset() -> dict:
+    return {"available": False, "days": None, "at": None, "reason": "Недоступно"}
+
+
+def _blank_limits(configured: bool) -> dict:
+    reason = "Сохрани ключ, чтобы увидеть зарплату" if not configured else "Недоступно"
+    meter = _blank_meter()
+    meter["reason"] = reason
+    reset = _blank_reset()
+    reset["reason"] = reason
+    return {
+        "configured": configured,
+        "cursorModels": dict(meter),
+        "otherModels": dict(meter),
+        "grokBot": dict(meter),
+        "reset": reset,
+        "grokReset": dict(reset),
+    }
+
+
+def _percent(value) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(number) or math.isinf(number) or number < 0 or number > 100:
+        return None
+    return round(number, 1)
+
+
+def _meter(used: float | None) -> dict:
+    if used is None:
+        return _blank_meter()
+    remaining = round(100 - used, 1)
+    if used >= 100:
+        level = "empty"
+    elif used >= 90:
+        level = "hot"
+    elif used >= 70:
+        level = "warn"
+    else:
+        level = "ok"
+    return {
+        "available": True,
+        "usedPercent": used,
+        "remainingPercent": remaining,
+        "level": level,
+        "reason": None,
+    }
+
+
+def _percent_in_text(text) -> float | None:
+    if not isinstance(text, str):
+        return None
+    match = re.search(r"(\d+(?:\.\d+)?)\s*%", text)
+    if not match:
+        return None
+    return _percent(match.group(1))
+
+
+def _reset_from_timestamp(value) -> dict:
+    if value is None or value == "":
+        return _blank_reset()
+    moment = None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        seconds = float(value)
+        if seconds > 10_000_000_000:
+            seconds = seconds / 1000
+        moment = datetime.fromtimestamp(seconds, timezone.utc)
+    elif isinstance(value, str):
+        text = value.strip()
+        if text.isdigit():
+            return _reset_from_timestamp(int(text))
+        try:
+            moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return _blank_reset()
+    if moment is None:
+        return _blank_reset()
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    seconds_left = (moment - datetime.now(timezone.utc)).total_seconds()
+    days = math.ceil(seconds_left / 86400) if seconds_left > 0 else 0
+    return {"available": True, "days": days, "at": moment.isoformat(), "reason": None}
+
+
+def parse_usage_summary(payload: dict | None) -> tuple[dict, dict, dict]:
+    cursor_meter = _blank_meter()
+    other_meter = _blank_meter()
+    reset = _blank_reset()
+    if not isinstance(payload, dict):
+        return cursor_meter, other_meter, reset
+    plan = {}
+    individual = payload.get("individualUsage")
+    if isinstance(individual, dict) and isinstance(individual.get("plan"), dict):
+        plan = individual["plan"]
+    cursor_used = _percent(plan.get("autoPercentUsed"))
+    other_used = _percent(plan.get("apiPercentUsed"))
+    if cursor_used is None:
+        cursor_used = _percent_in_text(payload.get("autoModelSelectedDisplayMessage"))
+    if other_used is None:
+        other_used = _percent_in_text(payload.get("namedModelSelectedDisplayMessage"))
+    if cursor_used is not None:
+        cursor_meter = _meter(cursor_used)
+    if other_used is not None:
+        other_meter = _meter(other_used)
+    reset = _reset_from_timestamp(payload.get("billingCycleEnd"))
+    return cursor_meter, other_meter, reset
+
+
+def parse_grok_status(payload: dict | None) -> tuple[dict, dict]:
+    meter = _blank_meter()
+    reset = _blank_reset()
+    if not isinstance(payload, dict):
+        return meter, reset
+    if payload.get("includedLimitZero") is True or payload.get("hasNonZeroIncludedLimit") is False:
+        meter["reason"] = "Нет недельного лимита"
+        return meter, reset
+    used = _percent(payload.get("usagePercent"))
+    if used is None and isinstance(payload.get("usage"), dict):
+        used = _percent(payload["usage"].get("usagePercent"))
+    if used is not None:
+        meter = _meter(used)
+    reset = _reset_from_timestamp(
+        payload.get("nextResetTimestampUtc")
+        or payload.get("nextResetAt")
+        or payload.get("resetAt")
+    )
+    return meter, reset
+
+
+def _read_authorized_json(api_key: str, url: str, method: str = "GET", body: dict | None = None) -> dict | None:
+    raw = None if body is None else json.dumps(body).encode("utf-8")
+    for scheme in ("bearer", "basic"):
+        request = urllib.request.Request(
+            url,
+            data=raw,
+            method=method,
+            headers={
+                "Authorization": authorization_value(api_key, scheme),
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with _USAGE_OPENER.open(request, timeout=8) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return None
+
+
+def fetch_limits(api_key: str) -> dict:
+    limits = _blank_limits(True)
+    summary_urls = [
+        os.environ.get("OFFICE_USAGE_SUMMARY_URL", "https://cursor.com/api/usage-summary"),
+        API_ROOT + "/v1/usage-summary",
+    ]
+    for url in summary_urls:
+        cursor_meter, other_meter, reset = parse_usage_summary(_read_authorized_json(api_key, url))
+        if cursor_meter["available"] or other_meter["available"] or reset["available"]:
+            limits["cursorModels"] = cursor_meter
+            limits["otherModels"] = other_meter
+            limits["reset"] = reset
+            break
+    grok_url = os.environ.get(
+        "OFFICE_GROK_USAGE_URL",
+        "https://cursor.com/api/dashboard/get-sand-usage-status",
+    )
+    grok_meter, grok_reset = parse_grok_status(
+        _read_authorized_json(api_key, grok_url, method="POST", body={})
+    )
+    limits["grokBot"] = grok_meter
+    limits["grokReset"] = grok_reset
+    return limits
+
+
+def limits_payload() -> dict:
+    key = read_key()
+    if not key:
+        return _blank_limits(False)
+    return fetch_limits(key)
+
+
 def office_payload() -> dict:
     key = read_key()
     if not key:
@@ -228,6 +435,9 @@ class OfficeHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/office":
             self._send_json(office_payload())
+            return
+        if path == "/api/limits":
+            self._send_json(limits_payload())
             return
         if path == "/api/demo":
             agents = [public_agent(item) for item in DEMO_AGENTS]

@@ -8,17 +8,20 @@
 </head>
 <body>
   <div class="app">
-    <header class="wall">
+    <header class="hud">
       <div class="brand">
-        <p class="eyebrow">Cursor</p>
+        <p class="eyebrow">CURSOR</p>
         <h1>Офис</h1>
         <p id="summary" class="summary">Смотрю, кто на месте…</p>
       </div>
-      <div class="window" aria-hidden="true">
+      <div class="skybox" aria-hidden="true">
         <div class="sky">
           <span class="cloud c1"></span>
           <span class="cloud c2"></span>
+          <span class="star s1"></span>
+          <span class="star s2"></span>
         </div>
+        <p class="sky-caption">небо за окном</p>
       </div>
       <div class="clock-card">
         <p id="clock" class="clock">--:--</p>
@@ -28,12 +31,42 @@
 
     <div id="banner" class="banner" hidden></div>
 
-    <main id="floor" class="floor" aria-live="polite"></main>
+    <div class="studio">
+      <aside class="deco left" aria-hidden="true">
+        <div class="poster"><span>AI</span><span>LAB</span></div>
+        <div class="shelf">
+          <i></i><i></i><i></i>
+        </div>
+        <div class="plant"><span class="pot"></span></div>
+      </aside>
+
+      <section id="board" class="board" aria-label="Лимиты — зарплата сотрудников">
+        <div class="board-bezel">
+          <p class="board-kicker">офисная доска</p>
+          <h2>ЛИМИТЫ — ЗАРПЛАТА СОТРУДНИКОВ</h2>
+          <div id="meters" class="meters"></div>
+          <div id="reset" class="reset"></div>
+        </div>
+      </section>
+
+      <aside class="deco right" aria-hidden="true">
+        <div class="lamp"></div>
+        <div class="cabinet"><span></span><span></span></div>
+        <div class="coffee"><i></i></div>
+      </aside>
+
+      <main id="floor" class="floor" aria-live="polite"></main>
+
+      <div class="sofa" aria-hidden="true">
+        <span class="cushion"></span>
+        <span class="cushion"></span>
+      </div>
+    </div>
 
     <aside class="panel">
       <form id="key-form">
         <label for="api-key">Ключ Cursor</label>
-        <input id="api-key" name="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Вставь ключ из Dashboard → API Keys">
+        <input id="api-key" name="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Длинный ключ после кнопки Add">
         <div class="row">
           <button type="submit" class="primary">Посадить своих</button>
           <button type="button" id="forget" class="quiet">Забыть ключ</button>
