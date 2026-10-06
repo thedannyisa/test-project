@@ -129,13 +129,16 @@ function render(agents, nextMode, error) {
     card.className = "desk pose-" + (agent.pose || "resting");
     const url = safeUrl(agent.url);
     card.append(makeScene(agent));
+    const plate = document.createElement("div");
+    plate.className = "nameplate";
     const name = document.createElement("p");
     name.className = "name";
     name.textContent = agent.name || "Без имени";
     const meta = document.createElement("p");
     meta.className = "name-meta";
     meta.textContent = POSE_LABEL[agent.pose] || "на месте";
-    card.append(name, meta);
+    plate.append(name, meta);
+    card.append(plate);
     card.addEventListener("click", () => {
       if (url) window.open(url, "_blank", "noopener");
     });
